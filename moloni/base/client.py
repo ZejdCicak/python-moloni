@@ -1,4 +1,6 @@
 import os
+from abc import ABC, abstractmethod
+from typing import Optional
 
 from cachetools import TTLCache
 from pydantic import BaseModel
@@ -11,7 +13,38 @@ from .logger_config import setup_logger
 
 logger = setup_logger(__name__)
 
-cache = TTLCache(maxsize=10, ttl=3600)
+
+class AbstractCacheService(ABC):
+    @abstractmethod
+    def get(self, key: str) -> dict:
+        """Retrieve an item from the cache."""
+        pass
+
+    @abstractmethod
+    def set(self, key: str, value):
+        """Store an item in the cache."""
+        pass
+
+    @abstractmethod
+    def get_key(self) -> str:
+        """Generate a cache."""
+        pass
+
+
+class CacheService(AbstractCacheService):
+    cache = TTLCache(maxsize=10, ttl=3600)
+
+    def __init__(self, client_id: str):
+        self.client_id = client_id
+
+    def get(self, key: str) -> Optional[dict]:
+        return self.cache.get(key, None)
+
+    def set(self, key: str, value: dict):
+        self.cache[key] = value
+
+    def get_key(self) -> str:
+        return f"token_{self.client_id}"
 
 
 class MyAuth:
@@ -28,6 +61,7 @@ class MyAuth:
         refresh_token: str = None,
         username: str = None,
         password: str = None,
+        cache: Optional[AbstractCacheService] = None,
     ):
         self.base_url = environment.value
         self.refresh_token = refresh_token
@@ -35,19 +69,21 @@ class MyAuth:
         self.client_secret = client_secret
         self.username = username
         self.password = password
+        self.cache = cache or CacheService(client_id=client_id)
 
     def get_auth(self) -> AccessTokenResponse:
         """
-        Get's the access token
+        Gets the access token
         :return:AccessTokenResponse
         """
 
-        cache_key = "token"
-        try:
-            access_token = cache[cache_key]
-        except KeyError:
+        cache_key = self.cache.get_key()
+        access_token = self.cache.get(cache_key)
+
+        if not access_token:
             access_token = self.get_token().dict()
-            cache[cache_key] = access_token
+            self.cache.set(cache_key, access_token)
+
         return AccessTokenResponse(**access_token)
 
     def get_token(self, **kwargs) -> AccessTokenResponse:
