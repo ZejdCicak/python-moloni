@@ -1,4 +1,5 @@
 import os
+from threading import Lock
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -21,30 +22,38 @@ class AbstractCacheService(ABC):
         pass
 
     @abstractmethod
-    def set(self, key: str, value):
+    def set(self, key: str, value: dict):
         """Store an item in the cache."""
         pass
 
     @abstractmethod
-    def get_key(self) -> str:
+    def get_key(self, client_id: str) -> str:
         """Generate a cache."""
         pass
 
 
-class CacheService(AbstractCacheService):
-    cache = TTLCache(maxsize=10, ttl=3600)
+class CacheServiceSingleton(AbstractCacheService):
+    _instance = None
+    _lock = Lock()
 
-    def __init__(self, client_id: str):
-        self.client_id = client_id
+    def __new__(cls):
+        # Check if an instance already exists without acquiring the lock
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._cache = TTLCache(maxsize=10, ttl=3600)
+
+        return cls._instance
 
     def get(self, key: str) -> Optional[dict]:
-        return self.cache.get(key, None)
+        return self._cache.get(key, None)
 
     def set(self, key: str, value: dict):
-        self.cache[key] = value
+        self._cache[key] = value
 
-    def get_key(self) -> str:
-        return f"token_{self.client_id}"
+    def get_key(self, client_id: str) -> str:
+        return f"token_{client_id}"
 
 
 class MyAuth:
@@ -69,7 +78,7 @@ class MyAuth:
         self.client_secret = client_secret
         self.username = username
         self.password = password
-        self.cache = cache or CacheService(client_id=client_id)
+        self.cache = cache or CacheServiceSingleton()
 
     def get_auth(self) -> AccessTokenResponse:
         """
@@ -77,7 +86,7 @@ class MyAuth:
         :return:AccessTokenResponse
         """
 
-        cache_key = self.cache.get_key()
+        cache_key = self.cache.get_key(client_id=self.client_id)
         access_token = self.cache.get(cache_key)
 
         if not access_token:
@@ -146,6 +155,7 @@ class MoloniBaseClient:
         version: str = "v1",
         validate: bool = True,
         log_level: str = "INFO",
+        cache: Optional[AbstractCacheService] = None,
     ):
         self.base_url = environment.value
         self.validate = validate
@@ -157,6 +167,7 @@ class MoloniBaseClient:
             auth_config.refresh_token,
             auth_config.username,
             auth_config.password,
+            cache
         )
         logger.setLevel(log_level)
 
